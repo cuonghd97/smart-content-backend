@@ -4,23 +4,30 @@ Xây dựng hệ thống smart content
 from http import HTTPStatus
 import jwt
 import uvicorn
-from click import File
 from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import constant
 from controller.account import AccountService
 from controller.smart_content import SmartContentService
-from models.smart_content import *
+from models.smart_content import (
+    KeywordCampaignModel,
+    ArticleRequestModel,
+    LoginRequestModel
+)
+from models.admin_model import RegisClientUserModel, ResetPasswordModel
+from controller.admin import AdminService
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
 smart_content_module = FastAPI()
 authentication_module = FastAPI()
+admin_module = FastAPI()
 
 smart_content_service = SmartContentService()
 account_service = AccountService()
+admin_service = AdminService()
 
 origins = ["*"]
 
@@ -44,6 +51,7 @@ async def catch_exceptions_middleware(request: Request, call_next):
 
 
 smart_content_module.middleware("http")(catch_exceptions_middleware)
+admin_module.middleware("http")(catch_exceptions_middleware)
 
 
 @smart_content_module.middleware("http")
@@ -66,17 +74,37 @@ async def check_user_header(request: Request, call_next):
     return next
 
 
+@admin_module.middleware("http")
+async def check_user_header(request: Request, call_next):
+    response = Response(status_code=401, content="Unauthorized")
+    if request["path"] == "/docs" or request["path"] == "/openapi.json":
+        next = await call_next(request)
+    else:
+        try:
+            user = jwt.decode(
+                request.headers["Authorization"],
+                constant.SECRET_KEY,
+                algorithms=["HS256"],
+            )
+            request.state.user_id = user["id"]
+        except:
+            print("error")
+            return response
+        next = await call_next(request)
+    return next
+
+
 @smart_content_module.post("/template")
 def CreateTemplate(
-    displayName: str = Form(...),
-    prompt: str = Form(...),
-    description: str = Form(...),
-    maxTokens: int = Form(...),
-    presencePenalty: int = Form(...),
-    frequencyPenalty: int = Form(...),
-    temperature: float = Form(...),
-    topP: int = Form(...),
-    templateImage: UploadFile = None,
+        displayName: str = Form(...),
+        prompt: str = Form(...),
+        description: str = Form(...),
+        maxTokens: int = Form(...),
+        presencePenalty: int = Form(...),
+        frequencyPenalty: int = Form(...),
+        temperature: float = Form(...),
+        topP: int = Form(...),
+        templateImage: UploadFile = None,
 ):
     try:
         return smart_content_service.create_template(
@@ -109,17 +137,17 @@ async def GetTemplateDetail(request: Request, templateId: str):
 
 @smart_content_module.put("/template/{templateId}")
 def UpdateTemplate(
-    request: Request,
-    templateId: str,
-    displayName: str = Form(...),
-    prompt: str = Form(...),
-    description: str = Form(...),
-    maxTokens: int = Form(...),
-    presencePenalty: int = Form(...),
-    frequencyPenalty: int = Form(...),
-    temperature: float = Form(...),
-    topP: int = Form(...),
-    templateImage: UploadFile = None,
+        request: Request,
+        templateId: str,
+        displayName: str = Form(...),
+        prompt: str = Form(...),
+        description: str = Form(...),
+        maxTokens: int = Form(...),
+        presencePenalty: int = Form(...),
+        frequencyPenalty: int = Form(...),
+        temperature: float = Form(...),
+        topP: int = Form(...),
+        templateImage: UploadFile = None,
 ):
     try:
         return smart_content_service.update_template(
@@ -173,7 +201,7 @@ async def create_keyword_campaign(keyword_campaign: KeywordCampaignModel):
 
 @smart_content_module.put("/update-keyword-campaign/{keyword_campaign_id}")
 async def update_keyword_campaign(
-    keyword_campaign_id, keyword_campaign: KeywordCampaignModel
+        keyword_campaign_id, keyword_campaign: KeywordCampaignModel
 ):
     keyword_campaign = {
         "organization": keyword_campaign.organization,
@@ -223,7 +251,28 @@ async def login(login_request: LoginRequestModel):
     return account_service.login(login_request)
 
 
+@admin_module.post('/regis')
+async def regis(client_user: RegisClientUserModel):
+    return admin_service.regis_client_user(client_user.username, client_user.password, client_user.fullname)
+
+
+@admin_module.put('/active/{userId}')
+async def active_user(userId):
+    return admin_service.active_client_user(user_id=userId)
+
+
+@admin_module.put('/deactivate/{userId}')
+async def deactivate_user(userId):
+    return admin_service.deactivate_client_user(user_id=userId)
+
+
+@admin_module.post('/reset/{userId}')
+async def reset_password(userId, reset_request: ResetPasswordModel):
+    return admin_service.reset_client_user_password(user_id=userId, password=reset_request.password)
+
+
 app.mount("/smart-content", smart_content_module)
+app.mount("/admin", admin_module)
 app.mount("/auth", authentication_module)
 
 if __name__ == "__main__":
