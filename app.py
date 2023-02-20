@@ -1,14 +1,18 @@
 """
 Xây dựng hệ thống smart content
 """
-from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
+from http import HTTPStatus
 import jwt
 import uvicorn
+from click import File
+from fastapi import FastAPI, Form, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+
 from config import constant
 from controller.account import AccountService
 from controller.smart_content import SmartContentService
 from models.smart_content import *
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI()
 
@@ -27,6 +31,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 
 async def catch_exceptions_middleware(request: Request, call_next):
@@ -47,7 +53,11 @@ async def check_user_header(request: Request, call_next):
         next = await call_next(request)
     else:
         try:
-            user = jwt.decode(request.headers["Authorization"], constant.SECRET_KEY, algorithms=["HS256"])
+            user = jwt.decode(
+                request.headers["Authorization"],
+                constant.SECRET_KEY,
+                algorithms=["HS256"],
+            )
             request.state.user_id = user["id"]
         except:
             print("error")
@@ -57,8 +67,35 @@ async def check_user_header(request: Request, call_next):
 
 
 @smart_content_module.post("/template")
-async def CreateTemplate(template_request: CreateTemplateRequestModel):
-    return smart_content_service.create_template(template_request)
+def CreateTemplate(
+    displayName: str = Form(...),
+    prompt: str = Form(...),
+    description: str = Form(...),
+    maxTokens: int = Form(...),
+    presencePenalty: int = Form(...),
+    frequencyPenalty: int = Form(...),
+    temperature: float = Form(...),
+    topP: int = Form(...),
+    templateImage: UploadFile = None,
+):
+    try:
+        return smart_content_service.create_template(
+            displayName,
+            prompt,
+            description,
+            maxTokens,
+            presencePenalty,
+            frequencyPenalty,
+            temperature,
+            topP,
+            templateImage,
+        )
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e)
+        )
+
 
 @smart_content_module.get("/template/presigned-image-upload")
 def GeneratePresignedURLUpload():
@@ -71,10 +108,37 @@ async def GetTemplateDetail(request: Request, templateId: str):
 
 
 @smart_content_module.put("/template/{templateId}")
-async def UpdateTemplate(
-    request: Request, templateId: str, template_request: CreateTemplateRequestModel
+def UpdateTemplate(
+    request: Request,
+    templateId: str,
+    displayName: str = Form(...),
+    prompt: str = Form(...),
+    description: str = Form(...),
+    maxTokens: int = Form(...),
+    presencePenalty: int = Form(...),
+    frequencyPenalty: int = Form(...),
+    temperature: float = Form(...),
+    topP: int = Form(...),
+    templateImage: UploadFile = None,
 ):
-    return smart_content_service.update_template(templateId, template_request)
+    try:
+        return smart_content_service.update_template(
+            templateId,
+            displayName,
+            prompt,
+            description,
+            maxTokens,
+            presencePenalty,
+            frequencyPenalty,
+            temperature,
+            topP,
+            templateImage,
+        )
+    except Exception as e:
+        print(e)
+        raise HTTPException(
+            status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e)
+        )
 
 
 @smart_content_module.get("/article-template/{templateId}")
@@ -85,12 +149,13 @@ async def GetArticleByTemplate(request: Request, templateId: str):
 
 
 @smart_content_module.delete("/template/{template_id}")
-async def DeleteTemplate(template_id: str):
+def DeleteTemplate(template_id: str):
+    print(template_id)
     return smart_content_service.delete_template(template_id)
 
 
 @smart_content_module.get("/list-template")
-async def GetListTemplate():
+def GetListTemplate():
     return smart_content_service.get_list_template()
 
 
@@ -149,7 +214,7 @@ async def post_article(request: Request, article_data: ArticleRequestModel):
 
 
 @smart_content_module.post("/generate-article")
-async def generate_article(article_data: ArticleRequestModel):
+def generate_article(article_data: ArticleRequestModel):
     return smart_content_service.generate_article(article_data)
 
 

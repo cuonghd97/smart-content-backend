@@ -1,19 +1,31 @@
-from datetime import timedelta
+import base64
 import re
-from models.smart_content import (
-    CreateTemplateRequestModel,
-    Message,
-    ArticleRequestModel,
-)
+import uuid
+from datetime import timedelta
+from http import HTTPStatus
+import uuid
+
+import openai
+import requests
+from bson import ObjectId
+from fastapi import File, Form, HTTPException, UploadFile
+
 from config.minio import minio_client
 from database.database import MongoConnection
-from bson import ObjectId
-from fastapi import HTTPException
-from http import HTTPStatus
-import base64
-import requests
-import openai
-import uuid
+from models.smart_content import (
+    ArticleRequestModel,
+    CreateTemplateRequestModel,
+    Message,
+)
+
+import random
+
+
+LIST_OPENAI_API_KEY = [
+    "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",
+    "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",
+    "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",
+]
 
 
 class SmartContentService:
@@ -23,17 +35,32 @@ class SmartContentService:
         self.article = MongoConnection().get_collection("article")
         self.website = MongoConnection().get_collection("website")
 
-    def create_template(self, template_request: CreateTemplateRequestModel):
+    def create_template(
+        self,
+        displayName: str,
+        prompt: str,
+        description: str,
+        maxTokens: int,
+        presencePenalty: int,
+        frequencyPenalty: int,
+        temperature: float,
+        topP: int,
+        templateImage: UploadFile = None,
+    ):
+        fileName = self.template_image_process(templateImage)
+
+        list_field_value = list(dict.fromkeys(re.findall(r"\[(.*?)\]", prompt)))
         template = {
-            "displayName": template_request.displayName,
-            "prompt": template_request.prompt,
-            "description": template_request.descriptions,
-            "listFieldValue": re.findall(r"\[(.*?)\]", template_request.prompt),
-            "maxTokens": template_request.maxTokens,
-            "presencePenalty": template_request.presencePenalty,
-            "frequencyPenalty": template_request.frequencyPenalty,
-            "temperature": template_request.temperature,
-            "topP": template_request.topP,
+            "displayName": displayName,
+            "prompt": prompt,
+            "description": description,
+            "listFieldValue": list_field_value,
+            "maxTokens": maxTokens,
+            "presencePenalty": presencePenalty,
+            "frequencyPenalty": frequencyPenalty,
+            "temperature": temperature,
+            "topP": topP,
+            "filename": fileName,
         }
 
         try:
@@ -44,26 +71,45 @@ class SmartContentService:
             return False
 
     def generate_presigned_url_image_template(self):
+        file_id = str(uuid.uuid4())
         url = minio_client.presigned_put_object(
             "template-image",
-            f"{uuid.uuid4()}.jpg",
+            f"{file_id}.jpg",
             expires=timedelta(hours=1),
         )
         print(url)
-        return {"url": url}
 
-    def update_template(self, templateId, template_request: CreateTemplateRequestModel):
+        return {"url": url, "fileId": file_id}
+
+    def update_template(
+        self,
+        templateId,
+        displayName: str,
+        prompt: str,
+        description: str,
+        maxTokens: int,
+        presencePenalty: int,
+        frequencyPenalty: int,
+        temperature: float,
+        topP: int,
+        templateImage: UploadFile = None,
+    ):
+        fileName = fileName = self.template_image_process(templateImage)
+        list_field_value = list(dict.fromkeys(re.findall(r"\[(.*?)\]", prompt)))
+
         template = {
-            "displayName": template_request.displayName,
-            "prompt": template_request.prompt,
-            "description": template_request.descriptions,
-            "listFieldValue": template_request.listFieldValue,
-            "maxTokens": template_request.maxTokens,
-            "presencePenalty": template_request.presencePenalty,
-            "frequencyPenalty": template_request.frequencyPenalty,
-            "temperature": template_request.temperature,
-            "topP": template_request.topP,
+            "displayName": displayName,
+            "prompt": prompt,
+            "description": description,
+            "listFieldValue": list_field_value,
+            "maxTokens": maxTokens,
+            "presencePenalty": presencePenalty,
+            "frequencyPenalty": frequencyPenalty,
+            "temperature": temperature,
+            "topP": topP,
         }
+        if fileName != "":
+            template["filename"] = fileName
 
         try:
             self.template.update_one({"_id": ObjectId(templateId)}, {"$set": template})
@@ -79,7 +125,9 @@ class SmartContentService:
             return {"message": "Delete template success"}
         except Exception as e:
             print(e)
-            return False
+            return HTTPException(
+                status_code=HTTPStatus.INTERNAL_SERVER_ERROR, detail=str(e)
+            )
 
     def get_template_detail(self, template_id):
         query = {"_id": ObjectId(template_id)}
@@ -107,13 +155,16 @@ class SmartContentService:
 
         list_template_response = []
         for template in list_template_model:
-            list_template_response.append(
-                {
-                    "id": str(template["_id"]),
-                    "displayName": template["displayName"],
-                    "descriptions": template["description"],
-                }
-            )
+            template_response = {
+                "id": str(template["_id"]),
+                "displayName": template["displayName"],
+                "descriptions": template["description"],
+                "url": "",
+            }
+
+            if "filename" in template and template["filename"] != "":
+                template_response["url"] = f"{template['filename']}"
+            list_template_response.append(template_response)
         return {"data": list_template_response}
 
     def create_keyword_campaign(self, keyword_campaign_data: dict):
@@ -210,21 +261,25 @@ class SmartContentService:
         template = self.template.find_one({"_id": ObjectId(article_data.templateId)})
 
         prompt = template["prompt"]
-        print(article_data.listField)
+        print(template)
+        list_field_template = template["listFieldValue"]
         for field in article_data.listField:
-            prompt = prompt.replace("[]", field)
+            prompt = prompt.replace(f"[{field['key']}]", field["value"])
 
         print(prompt)
+        if not article_data.style:
+            prompt += f" theo phong cách {article_data.style}"
 
-        openai.api_key = "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"
+        openai.api_key = random.choice(LIST_OPENAI_API_KEY)
         results = openai.Completion.create(
             model="text-davinci-003",
             prompt=prompt + "",
-            temperature=0.7,
+            temperature=template["temperature"],
             max_tokens=3158,
             top_p=0.01,
             frequency_penalty=0.2,
             presence_penalty=0,
+            stream=True,
         )
         response = dict(results)
         openai_response = response["choices"]
@@ -259,11 +314,15 @@ class SmartContentService:
         return {"data": result}
 
     def get_article(self, user_id, template_id):
-        query = {"userId": 1, "templateId": template_id}
+        query = {"userId": user_id, "templateId": template_id}
 
         total_article = self.article.count_documents(query)
         if total_article == 0:
-            article = {"templateId": template_id, "userId": 1, "contentHistory": []}
+            article = {
+                "templateId": template_id,
+                "userId": user_id,
+                "contentHistory": [],
+            }
             self.article.insert_one(article)
 
         article_model = self.article.find_one(query)
@@ -275,8 +334,25 @@ class SmartContentService:
             "displayName": template["displayName"],
             "listField": template["listFieldValue"],
             "description": template["description"],
+            "prompt": template["prompt"],
+            "maxTokens": template["maxTokens"],
             "userId": article_model["userId"],
             "contentHistory": article_model["contentHistory"],
+            "openaiToken": random.choice(LIST_OPENAI_API_KEY),
         }
 
         return article_response
+
+    def template_image_process(self, templateImage: UploadFile):
+        fileName = ""
+        if templateImage and templateImage.filename != "":
+            print(templateImage)
+            fileName = (
+                f"assets/images/template/{str(uuid.uuid4())}_{templateImage.filename}"
+            )
+            with open(fileName, "wb+") as templateImageObject:
+                templateImageObject.write(templateImage.file.read())
+            templateImageObject.close()
+
+        return fileName
+    

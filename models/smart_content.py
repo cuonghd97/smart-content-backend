@@ -8,10 +8,12 @@ class Message:
     GENERAL_ERROR = "Error"
     TEMPLATE_NOT_FOUND = "Could not found template content"
 
+
 class KeywordCampaignModel(BaseModel):
     organization: str
     product_type: str
     content_type: Optional[str]
+
 
 class CreateTemplateRequestModel(BaseModel):
     displayName: Optional[str]
@@ -24,6 +26,8 @@ class CreateTemplateRequestModel(BaseModel):
     frequencyPenalty: Optional[int]
     presencePenalty: Optional[int]
     topP: Optional[int]
+    filename: Optional[str]
+
 
 class ArticleRequestModel(BaseModel):
     template: Optional[str]
@@ -31,10 +35,12 @@ class ArticleRequestModel(BaseModel):
     userId: Optional[str]
     templateId: Optional[str]
     prompt: Optional[str]
+    style: Optional["str"]
     websiteId: Optional[str]
     articleId: Optional[str]
     templateId: Optional[str]
     listField: Optional[list]
+
 
 class LoginRequestModel(BaseModel):
     username: str
